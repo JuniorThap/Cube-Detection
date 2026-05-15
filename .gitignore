@@ -1,0 +1,21 @@
+# Ignore datasets
+abu vision data/
+dataset/
+datasets/
+
+# Ignore RealSense recordings
+*.bag
+
+# Ignore training runs except final weights
+runs/
+
+# Keep final models
+!best.pt
+!*.pt
+
+# Python
+__pycache__/
+*.pyc
+
+# VSCode
+.vscode/

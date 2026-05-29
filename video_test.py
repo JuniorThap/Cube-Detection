@@ -1,4 +1,3 @@
-import pyrealsense2 as rs
 import numpy as np
 import cv2
 from ultralytics import YOLO
@@ -7,52 +6,38 @@ from ultralytics import YOLO
 # SETTINGS
 # ==========================================
 
-BAG_FILE = r"C:\Users\thapa\Documents\FIBOX\Box_Detection\abu vision data\realsense_data_20260425_123816-002.bag"
-
+VIDEO_FILE = r"C:\Users\thapa\Documents\FIBOX\Box_Detection\abu vision data\realsense_video_20260425_114141.mp4"
 
 MODEL_PATH = r"best.pt"
 
-OUTPUT_VIDEO = "yolo_output.mp4"
+OUTPUT_VIDEO = "yolo_output_with_depth.mp4"
 
 CONFIDENCE = 0.738
 
 # ==========================================
-# LOAD YOLO MODEL
+# LOAD MODEL
 # ==========================================
 
 model = YOLO(MODEL_PATH)
 
 # ==========================================
-# REALSENSE PIPELINE
+# OPEN VIDEO
 # ==========================================
 
-pipeline = rs.pipeline()
-config = rs.config()
+cap = cv2.VideoCapture(VIDEO_FILE)
 
-rs.config.enable_device_from_file(
-    config,
-    BAG_FILE,
-    repeat_playback=False
-)
+if not cap.isOpened():
+    raise RuntimeError(f"Cannot open video: {VIDEO_FILE}")
 
-profile = pipeline.start(config)
+fps = cap.get(cv2.CAP_PROP_FPS)
 
-# Disable realtime playback
-playback = profile.get_device().as_playback()
-playback.set_real_time(False)
+full_width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH))
+height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT))
 
-# ==========================================
-# GET VIDEO INFO
-# ==========================================
-
-frames = pipeline.wait_for_frames()
-color_frame = frames.get_color_frame()
-
-frame = np.asanyarray(
-    color_frame.get_data()
-)
-
-height, width = frame.shape[:2]
+# Side-by-side:
+# LEFT  = RGB
+# RIGHT = depth colormap
+rgb_width = full_width // 2
 
 # ==========================================
 # VIDEO WRITER
@@ -60,76 +45,104 @@ height, width = frame.shape[:2]
 
 fourcc = cv2.VideoWriter_fourcc(*'mp4v')
 
-video_writer = cv2.VideoWriter(
+writer = cv2.VideoWriter(
     OUTPUT_VIDEO,
     fourcc,
-    30,                 # FPS
-    (width, height)
+    fps,
+    (full_width, height)
 )
 
-print("Recording started...")
-print("Press 'q' to quit.")
+print("Processing started...")
+print("Press Q to quit.")
 
 # ==========================================
-# INFERENCE LOOP
+# MAIN LOOP
 # ==========================================
 
-try:
+while True:
 
-    while True:
+    ret, frame = cap.read()
 
-        frames = pipeline.wait_for_frames()
+    if not ret:
+        print("End of video.")
+        break
 
-        color_frame = frames.get_color_frame()
+    # Split side-by-side frame
+    rgb_frame = frame[:, :rgb_width]
+    depth_frame = frame[:, rgb_width:]
 
-        if not color_frame:
-            continue
+    # ======================================
+    # YOLO INFERENCE
+    # ======================================
 
-        frame = np.asanyarray(
-            color_frame.get_data()
-        )
+    results = model(
+        rgb_frame,
+        conf=CONFIDENCE,
+        verbose=False
+    )
 
-        # ==========================================
-        # YOLO INFERENCE
-        # ==========================================
+    annotated_rgb = results[0].plot()
 
-        results = model(
-            frame,
-            conf=CONFIDENCE
-        )
+    # ======================================
+    # DRAW CENTER POINTS
+    # ======================================
 
-        # Draw detections
-        annotated_frame = results[0].plot()
+    boxes = results[0].boxes
 
-        # ==========================================
-        # SAVE VIDEO FRAME
-        # ==========================================
+    if boxes is not None:
 
-        video_writer.write(annotated_frame)
+        for box in boxes:
 
-        # ==========================================
-        # DISPLAY
-        # ==========================================
+            x1, y1, x2, y2 = box.xyxy[0].cpu().numpy()
 
-        cv2.imshow(
-            "YOLO .bag Inference",
-            annotated_frame
-        )
+            x1 = int(x1)
+            y1 = int(y1)
+            x2 = int(x2)
+            y2 = int(y2)
 
-        # Quit
-        if cv2.waitKey(1) & 0xFF == ord('q'):
-            break
+            cx = int((x1 + x2) / 2)
+            cy = int((y1 + y2) / 2)
 
-# End of bag file
-except RuntimeError:
-    print("Reached end of .bag file.")
+            cv2.circle(
+                annotated_rgb,
+                (cx, cy),
+                5,
+                (0, 255, 0),
+                -1
+            )
 
-finally:
+    # ======================================
+    # COMBINE RGB + DEPTH
+    # ======================================
 
-    pipeline.stop()
+    combined = np.hstack((
+        annotated_rgb,
+        depth_frame
+    ))
 
-    video_writer.release()
+    # Save
+    writer.write(combined)
 
-    cv2.destroyAllWindows()
+    # Display
+    cv2.imshow(
+        "YOLO + Depth",
+        combined
+    )
 
-    print(f"Saved output video: {OUTPUT_VIDEO}")
+    # Quit
+    key = cv2.waitKey(1)
+
+    if key == ord('q') or key == ord('Q'):
+        break
+
+# ==========================================
+# CLEANUP
+# ==========================================
+
+cap.release()
+
+writer.release()
+
+cv2.destroyAllWindows()
+
+print(f"Saved output: {OUTPUT_VIDEO}")
